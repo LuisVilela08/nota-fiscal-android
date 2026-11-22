@@ -2,6 +2,8 @@ package br.com.controlefinancas.nota;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -28,6 +30,7 @@ import androidx.webkit.WebViewFeature;
 import org.json.JSONTokener;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -189,13 +192,31 @@ public class MainActivity extends Activity {
         enviado = true;
         String url = getString(R.string.app_url) + "/compartilhar#text=" + Uri.encode(texto);
         try {
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+            Intent it = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            it.addCategory(Intent.CATEGORY_BROWSABLE);
+            String pwa = acharAplicativoInstalado(it);
+            if (pwa != null) it.setPackage(pwa); // abre direto no aplicativo instalado, sem passar pelo navegador
+            startActivity(it);
         } catch (Exception e) {
             enviado = false;
             falhar("Não consegui abrir o app Controle de Finanças.");
             return;
         }
         finish();
+    }
+
+    /** Procura o Controle de Finanças instalado como aplicativo (os "WebAPK" do Chrome têm "webapk" no nome do pacote). */
+    private String acharAplicativoInstalado(Intent it) {
+        try {
+            List<ResolveInfo> lista = getPackageManager().queryIntentActivities(it, PackageManager.MATCH_ALL);
+            for (ResolveInfo r : lista) {
+                String pacote = r.activityInfo.packageName;
+                if (pacote != null && pacote.toLowerCase().contains("webapk")) return pacote;
+            }
+        } catch (Exception e) {
+            // sem permissão para consultar: segue pelo caminho normal
+        }
+        return null;
     }
 
     private void falhar(String mensagem) {
