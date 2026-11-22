@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nota Fiscal</string>
+    <!-- Endereço do seu app Controle de Finanças (o mesmo que você abre no celular), sem barra no final -->
+    <string name="app_url">https://controle-financas-2026.vercel.app</string>
+</resources>
