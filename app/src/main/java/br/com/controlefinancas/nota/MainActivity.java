@@ -9,6 +9,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
+import android.webkit.CookieManager;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -20,22 +21,44 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
+import androidx.webkit.WebSettingsCompat;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+
 import org.json.JSONTokener;
 
+import java.util.Collections;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
  * Abre a nota fiscal (NFC-e) num navegador interno do próprio celular, lê o texto da página
  * e entrega ao app Controle de Finanças, que abre o Novo lançamento já preenchido.
+ *
+ * Se o site recusar o pedido, tenta outras formas de se apresentar (sem o aviso do aplicativo,
+ * com a identificação do Chrome, etc.) e, no fim, mostra o resultado de cada tentativa.
  */
 public class MainActivity extends Activity {
 
     private static final Pattern ENDERECO = Pattern.compile("https?://\\S+");
     private static final Pattern NOTA = Pattern.compile("valor a pagar|vl\\.? ?total|qtd\\. total", Pattern.CASE_INSENSITIVE);
-    private static final int MAX_TENTATIVAS = 12;
+    private static final int MAX_CHECAGENS = 6;
+
+    // cada tentativa: {sem o aviso do aplicativo, identificação do Chrome, simula o objeto "chrome" da página}
+    private static final boolean[][] TENTATIVAS = {
+            {true, false, false},
+            {true, true, false},
+            {true, true, true},
+    };
+    private static final String[] NOMES = {
+            "sem aviso do app, identificação padrão",
+            "sem aviso do app, identificação do Chrome",
+            "sem aviso do app, Chrome completo",
+    };
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final StringBuilder relatorio = new StringBuilder();
+    private FrameLayout raiz;
     private WebView web;
     private LinearLayout painel;
     private TextView status;
@@ -43,16 +66,15 @@ public class MainActivity extends Activity {
     private Button botaoNavegador;
     private Button botaoPagina;
     private String alvo;
-    private int tentativas = 0;
+    private int tentativa = -1;
+    private int checagens = 0;
     private boolean enviado = false;
 
     @Override
     protected void onCreate(Bundle estado) {
         super.onCreate(estado);
 
-        FrameLayout raiz = new FrameLayout(this);
-        web = new WebView(this);
-        raiz.addView(web, new FrameLayout.LayoutParams(-1, -1));
+        raiz = new FrameLayout(this);
 
         painel = new LinearLayout(this);
         painel.setOrientation(LinearLayout.VERTICAL);
@@ -62,7 +84,7 @@ public class MainActivity extends Activity {
         raiz.addView(painel, new FrameLayout.LayoutParams(-1, -1));
 
         status = new TextView(this);
-        status.setTextSize(18);
+        status.setTextSize(17);
         status.setGravity(Gravity.CENTER);
         status.setTextColor(Color.parseColor("#0f172a"));
         painel.addView(status, new LinearLayout.LayoutParams(-1, -2));
@@ -79,45 +101,87 @@ public class MainActivity extends Activity {
             mostrar("Nota Fiscal\n\nLeia o QR Code do cupom com a câmera do celular e toque no link. Ou, com a nota aberta no navegador, toque em Compartilhar e escolha Nota Fiscal.", false);
             return;
         }
+        proxima();
+    }
 
-        mostrar("Lendo a nota…", true);
-        WebSettings ajustes = web.getSettings();
+    /** Começa a próxima tentativa com um navegador interno novo (sem cookies da tentativa anterior). */
+    private void proxima() {
+        if (enviado || isFinishing()) return;
+        tentativa++;
+        if (tentativa >= TENTATIVAS.length) {
+            falhar("Não consegui ler a nota.\n\n" + relatorio);
+            return;
+        }
+        checagens = 0;
+        mostrar("Lendo a nota… (tentativa " + (tentativa + 1) + " de " + TENTATIVAS.length + ")", true);
+        if (web != null) {
+            raiz.removeView(web);
+            web.destroy();
+        }
+        CookieManager.getInstance().removeAllCookies(null);
+        web = new WebView(this);
+        raiz.addView(web, 0, new FrameLayout.LayoutParams(-1, -1));
+        configurar(web, TENTATIVAS[tentativa]);
+        final int minha = tentativa;
+        web.loadUrl(alvo);
+        handler.postDelayed(() -> verificar(minha), 2500);
+    }
+
+    private void configurar(WebView w, boolean[] modo) {
+        WebSettings ajustes = w.getSettings();
         ajustes.setJavaScriptEnabled(true);
         ajustes.setDomStorageEnabled(true);
-        // parece o Chrome comum do celular
-        ajustes.setUserAgentString(ajustes.getUserAgentString().replace("; wv", "").replace("Version/4.0 ", ""));
-        web.setWebViewClient(new WebViewClient() {
+        if (modo[1]) {
+            ajustes.setUserAgentString(ajustes.getUserAgentString().replace("; wv", "").replace("Version/4.0 ", ""));
+        }
+        if (modo[0] && WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+            // não enviar o cabeçalho que identifica este aplicativo
+            WebSettingsCompat.setRequestedWithHeaderOriginAllowList(ajustes, Collections.<String>emptySet());
+        }
+        if (modo[2] && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            WebViewCompat.addDocumentStartJavaScript(w,
+                    "if(!window.chrome){window.chrome={runtime:{},app:{isInstalled:false},loadTimes:function(){},csi:function(){}};}",
+                    Collections.singleton("*"));
+        }
+        final int minha = tentativa;
+        w.setWebViewClient(new WebViewClient() {
             @Override
             public void onReceivedError(WebView v, WebResourceRequest pedido, WebResourceError erro) {
-                if (pedido.isForMainFrame()) {
-                    falhar("Não consegui abrir a página da nota. Verifique a internet.");
+                if (pedido.isForMainFrame() && minha == tentativa) {
+                    registrar("não abriu a página (sem internet?)");
+                    proxima();
                 }
             }
         });
-        web.loadUrl(alvo);
-        handler.postDelayed(this::verificar, 2500);
     }
 
-    /** Pergunta à página o texto que ela mostra; se já for a nota, entrega ao app. Tenta de novo até a página carregar. */
-    private void verificar() {
-        if (enviado || isFinishing()) return;
+    /** Pergunta à página o texto que ela mostra; se já for a nota, entrega ao app. */
+    private void verificar(int deQuem) {
+        if (enviado || isFinishing() || deQuem != tentativa) return;
         web.evaluateJavascript("(function(){return document.body ? document.body.innerText : ''})()", valor -> {
+            if (enviado || isFinishing() || deQuem != tentativa) return;
             String texto = decodificar(valor);
             if (texto.length() > 150 && NOTA.matcher(texto).find()) {
                 enviar(texto);
                 return;
             }
             if (texto.toLowerCase().contains("request rejected")) {
-                falhar("A Sefaz recusou a consulta.");
+                registrar("recusada pelo site");
+                proxima();
                 return;
             }
-            tentativas++;
-            if (tentativas >= MAX_TENTATIVAS) {
-                falhar("Não consegui ler a nota.");
+            checagens++;
+            if (checagens >= MAX_CHECAGENS) {
+                registrar("a página não carregou a tempo");
+                proxima();
                 return;
             }
-            handler.postDelayed(this::verificar, 1500);
+            handler.postDelayed(() -> verificar(deQuem), 1500);
         });
+    }
+
+    private void registrar(String resultado) {
+        relatorio.append("• Tentativa ").append(tentativa + 1).append(" (").append(NOMES[tentativa]).append("): ").append(resultado).append("\n");
     }
 
     private void enviar(String texto) {
@@ -137,12 +201,14 @@ public class MainActivity extends Activity {
     private void falhar(String mensagem) {
         if (enviado) return;
         mostrar(mensagem, false);
+        status.setTextSize(15);
         botaoNavegador.setVisibility(View.VISIBLE);
         botaoPagina.setVisibility(View.VISIBLE);
     }
 
     private void mostrar(String mensagem, boolean carregando) {
         painel.setVisibility(View.VISIBLE);
+        status.setTextSize(17);
         status.setText(mensagem);
         progresso.setVisibility(carregando ? View.VISIBLE : View.GONE);
         botaoNavegador.setVisibility(View.GONE);
@@ -204,6 +270,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        if (web != null) web.destroy();
         super.onDestroy();
     }
 }

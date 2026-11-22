@@ -1,9 +1,13 @@
-NOTA FISCAL - aplicativo Android auxiliar do Controle de Finanças
+NOTA FISCAL - aplicativo Android auxiliar do Controle de Finanças (versão 2)
 
 O que faz: abre a nota fiscal (NFC-e) dentro do seu celular, lê o texto e entrega ao
 app Controle de Finanças, que abre o Novo lançamento já preenchido.
+
+Versão 2: se o site da Sefaz recusar o pedido, o aplicativo tenta outras formas de se
+apresentar (3 tentativas) e, se nenhuma funcionar, mostra o resultado de cada uma.
 
 Antes de compilar, confira em app/src/main/res/values/strings.xml se o endereço
 (app_url) é o mesmo que você usa para abrir o Controle de Finanças.
 
 O arquivo .apk é gerado automaticamente pelo GitHub (aba Actions).
+IMPORTANTE: desinstale a versão anterior do celular antes de instalar a nova.
