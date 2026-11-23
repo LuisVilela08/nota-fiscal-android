@@ -47,6 +47,7 @@ public class MainActivity extends Activity {
     private static final Pattern ENDERECO = Pattern.compile("https?://\\S+");
     private static final Pattern NOTA = Pattern.compile("valor a pagar|vl\\.? ?total|qtd\\. total", Pattern.CASE_INSENSITIVE);
     private static final int MAX_CHECAGENS = 6;
+    private static final String NOTA_TESTE = "NOTA DE TESTE\nItem de teste (Código: 1 ) Qtde.:1 UN: UN Vl. Unit.: 1,23 Vl. Total 1,23\nQtd. total de itens:\n1\nValor a pagar R$:\n1,23\n";
 
     // cada tentativa: {sem o aviso do aplicativo, identificação do Chrome, simula o objeto "chrome" da página}
     private static final boolean[][] TENTATIVAS = {
@@ -71,6 +72,7 @@ public class MainActivity extends Activity {
     private Button botaoPagina;
     private Button botaoTeste;
     private Button botaoAbrir;
+    private Button botaoEnviarTeste;
     private String alvo;
     private int tentativa = -1;
     private int checagens = 0;
@@ -101,14 +103,16 @@ public class MainActivity extends Activity {
         botaoNavegador = botao("Abrir no navegador", v -> abrirNoNavegador());
         botaoPagina = botao("Ver a página", v -> painel.setVisibility(View.GONE));
         botaoTeste = botao("Testar abertura do Controle", v -> status.setText(diagnostico()));
-        botaoAbrir = botao("Abrir o Controle agora", v -> abrirControle(getString(R.string.app_url) + "/novo"));
+        botaoAbrir = botao("Abrir o Controle pelo ícone", v -> abrirPeloIcone());
+        botaoEnviarTeste = botao("Enviar nota de teste ao Controle", v -> enviarTeste());
         setContentView(raiz);
 
         alvo = descobrirEndereco(getIntent());
         if (alvo == null) {
-            mostrar("Nota Fiscal (versão 4)\n\nLeia o QR Code do cupom com a câmera do celular e toque no link. Ou, com a nota aberta no navegador, toque em Compartilhar e escolha Nota Fiscal.", false);
+            mostrar("Nota Fiscal (versão 5)\n\nLeia o QR Code do cupom com a câmera do celular e toque no link. Ou, com a nota aberta no navegador, toque em Compartilhar e escolha Nota Fiscal.", false);
             botaoTeste.setVisibility(View.VISIBLE);
             botaoAbrir.setVisibility(View.VISIBLE);
+            botaoEnviarTeste.setVisibility(View.VISIBLE);
             return;
         }
         proxima();
@@ -197,15 +201,60 @@ public class MainActivity extends Activity {
     private void enviar(String texto) {
         if (enviado) return;
         enviado = true;
-        String url = getString(R.string.app_url) + "/compartilhar#text=" + Uri.encode(texto);
+        String compacto = compactar(texto);
         try {
-            abrirControle(url);
+            // 1º: entrega pelo "Compartilhar" do aplicativo instalado (abre dentro dele, sem navegador)
+            if (compartilharComControle(compacto)) {
+                finish();
+                return;
+            }
+            // 2º: plano B, por endereço (pode abrir no navegador)
+            abrirControle(getString(R.string.app_url) + "/compartilhar#text=" + Uri.encode(compacto));
         } catch (Exception e) {
             enviado = false;
             falhar("Não consegui abrir o app Controle de Finanças.");
             return;
         }
         finish();
+    }
+
+    /** Reduz o texto: tira o rodapé da nota e os espaços repetidos (o endereço de entrega tem limite de tamanho). */
+    private String compactar(String t) {
+        int i = t.indexOf("\nConsumidor");
+        if (i > 0) t = t.substring(0, i);
+        t = t.replaceAll("[ \\t]+", " ").replaceAll("\\s*\\n\\s*", "\n").trim();
+        return t.length() > 9000 ? t.substring(0, 9000) : t;
+    }
+
+    /** Envia o texto ao Controle pelo Compartilhar do Android, direto ao aplicativo instalado. */
+    private boolean compartilharComControle(String texto) {
+        String pacote = acharAplicativoInstalado(null);
+        if (pacote == null) return false;
+        Intent s = new Intent(Intent.ACTION_SEND);
+        s.setType("text/plain");
+        s.putExtra(Intent.EXTRA_TEXT, texto);
+        s.setPackage(pacote);
+        try {
+            startActivity(s);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void enviarTeste() {
+        if (compartilharComControle(NOTA_TESTE)) return;
+        status.setText("Não consegui enviar ao Controle. Se o app está instalado, remova-o e instale de novo pelo Chrome (menu ⋮ › Instalar aplicativo).");
+    }
+
+    private void abrirPeloIcone() {
+        String pacote = acharAplicativoInstalado(null);
+        Intent li = pacote == null ? null : getPackageManager().getLaunchIntentForPackage(pacote);
+        if (li == null) {
+            status.setText("Não encontrei o aplicativo Controle instalado.");
+            return;
+        }
+        startActivity(li);
     }
 
     /** Abre o endereço direto no Controle de Finanças instalado como aplicativo; se não achar, usa o caminho normal (navegador). */
@@ -239,6 +288,7 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             // segue para a outra forma
         }
+        if (it == null) return null;
         try {
             List<ResolveInfo> lista = pm.queryIntentActivities(it, PackageManager.MATCH_ALL);
             for (ResolveInfo r : lista) {
@@ -253,7 +303,7 @@ public class MainActivity extends Activity {
 
     /** Texto de teste: o que o Android mostra sobre o Controle de Finanças instalado. */
     private String diagnostico() {
-        StringBuilder sb = new StringBuilder("Versão 4\n\nAplicativos do tipo webapk instalados:\n");
+        StringBuilder sb = new StringBuilder("Versão 5\n\nAplicativos do tipo webapk instalados:\n");
         PackageManager pm = getPackageManager();
         int n = 0;
         try {
@@ -277,7 +327,19 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             sb.append("(erro ao consultar)\n");
         }
-        sb.append("\nEscolhido: ").append(String.valueOf(acharAplicativoInstalado(teste)));
+        String pwa = acharAplicativoInstalado(teste);
+        sb.append("\nEscolhido: ").append(String.valueOf(pwa));
+        if (pwa != null) {
+            Intent envio = new Intent(Intent.ACTION_SEND);
+            envio.setType("text/plain");
+            envio.setPackage(pwa);
+            sb.append("\n\nAceita receber compartilhamento: ");
+            try {
+                sb.append(pm.queryIntentActivities(envio, PackageManager.MATCH_ALL).isEmpty() ? "NÃO (remova e instale o Controle de novo)" : "sim");
+            } catch (Exception e) {
+                sb.append("sem resposta");
+            }
+        }
         return sb.toString();
     }
 
@@ -298,6 +360,7 @@ public class MainActivity extends Activity {
         botaoPagina.setVisibility(View.GONE);
         botaoTeste.setVisibility(View.GONE);
         botaoAbrir.setVisibility(View.GONE);
+        botaoEnviarTeste.setVisibility(View.GONE);
     }
 
     /** Abre a nota no navegador padrão (sem voltar para este app). */
