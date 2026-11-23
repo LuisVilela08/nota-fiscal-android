@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- necessário para enxergar o Controle de Finanças instalado como aplicativo -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <!-- permite descobrir se o Controle de Finanças está instalado como aplicativo -->
     <queries>

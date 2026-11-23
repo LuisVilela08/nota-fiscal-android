@@ -2,6 +2,7 @@ package br.com.controlefinancas.nota;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
@@ -68,6 +69,8 @@ public class MainActivity extends Activity {
     private ProgressBar progresso;
     private Button botaoNavegador;
     private Button botaoPagina;
+    private Button botaoTeste;
+    private Button botaoAbrir;
     private String alvo;
     private int tentativa = -1;
     private int checagens = 0;
@@ -97,11 +100,15 @@ public class MainActivity extends Activity {
 
         botaoNavegador = botao("Abrir no navegador", v -> abrirNoNavegador());
         botaoPagina = botao("Ver a página", v -> painel.setVisibility(View.GONE));
+        botaoTeste = botao("Testar abertura do Controle", v -> status.setText(diagnostico()));
+        botaoAbrir = botao("Abrir o Controle agora", v -> abrirControle(getString(R.string.app_url) + "/novo"));
         setContentView(raiz);
 
         alvo = descobrirEndereco(getIntent());
         if (alvo == null) {
-            mostrar("Nota Fiscal\n\nLeia o QR Code do cupom com a câmera do celular e toque no link. Ou, com a nota aberta no navegador, toque em Compartilhar e escolha Nota Fiscal.", false);
+            mostrar("Nota Fiscal (versão 4)\n\nLeia o QR Code do cupom com a câmera do celular e toque no link. Ou, com a nota aberta no navegador, toque em Compartilhar e escolha Nota Fiscal.", false);
+            botaoTeste.setVisibility(View.VISIBLE);
+            botaoAbrir.setVisibility(View.VISIBLE);
             return;
         }
         proxima();
@@ -192,11 +199,7 @@ public class MainActivity extends Activity {
         enviado = true;
         String url = getString(R.string.app_url) + "/compartilhar#text=" + Uri.encode(texto);
         try {
-            Intent it = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-            it.addCategory(Intent.CATEGORY_BROWSABLE);
-            String pwa = acharAplicativoInstalado(it);
-            if (pwa != null) it.setPackage(pwa); // abre direto no aplicativo instalado, sem passar pelo navegador
-            startActivity(it);
+            abrirControle(url);
         } catch (Exception e) {
             enviado = false;
             falhar("Não consegui abrir o app Controle de Finanças.");
@@ -205,18 +208,77 @@ public class MainActivity extends Activity {
         finish();
     }
 
+    /** Abre o endereço direto no Controle de Finanças instalado como aplicativo; se não achar, usa o caminho normal (navegador). */
+    private void abrirControle(String url) {
+        Intent it = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        it.addCategory(Intent.CATEGORY_BROWSABLE);
+        String pacote = acharAplicativoInstalado(it);
+        if (pacote != null) {
+            Intent direto = new Intent(it);
+            direto.setPackage(pacote);
+            try {
+                startActivity(direto);
+                return;
+            } catch (Exception e) {
+                // cai no caminho normal
+            }
+        }
+        startActivity(it);
+    }
+
     /** Procura o Controle de Finanças instalado como aplicativo (os "WebAPK" do Chrome têm "webapk" no nome do pacote). */
     private String acharAplicativoInstalado(Intent it) {
+        PackageManager pm = getPackageManager();
         try {
-            List<ResolveInfo> lista = getPackageManager().queryIntentActivities(it, PackageManager.MATCH_ALL);
+            for (ApplicationInfo a : pm.getInstalledApplications(0)) {
+                if (a.packageName != null && a.packageName.toLowerCase().contains("webapk")
+                        && String.valueOf(pm.getApplicationLabel(a)).toLowerCase().contains("controle")) {
+                    return a.packageName;
+                }
+            }
+        } catch (Exception e) {
+            // segue para a outra forma
+        }
+        try {
+            List<ResolveInfo> lista = pm.queryIntentActivities(it, PackageManager.MATCH_ALL);
             for (ResolveInfo r : lista) {
                 String pacote = r.activityInfo.packageName;
                 if (pacote != null && pacote.toLowerCase().contains("webapk")) return pacote;
             }
         } catch (Exception e) {
-            // sem permissão para consultar: segue pelo caminho normal
+            // sem resposta
         }
         return null;
+    }
+
+    /** Texto de teste: o que o Android mostra sobre o Controle de Finanças instalado. */
+    private String diagnostico() {
+        StringBuilder sb = new StringBuilder("Versão 4\n\nAplicativos do tipo webapk instalados:\n");
+        PackageManager pm = getPackageManager();
+        int n = 0;
+        try {
+            for (ApplicationInfo a : pm.getInstalledApplications(0)) {
+                if (a.packageName != null && a.packageName.toLowerCase().contains("webapk")) {
+                    sb.append("• ").append(pm.getApplicationLabel(a)).append(" — ").append(a.packageName).append("\n");
+                    n++;
+                }
+            }
+        } catch (Exception e) {
+            sb.append("(erro ao listar: ").append(e.getClass().getSimpleName()).append(")\n");
+        }
+        if (n == 0) sb.append("(nenhum)\n");
+        Intent teste = new Intent(Intent.ACTION_VIEW, Uri.parse(getString(R.string.app_url) + "/novo"));
+        teste.addCategory(Intent.CATEGORY_BROWSABLE);
+        sb.append("\nPara abrir o link do Controle, o Android oferece:\n");
+        try {
+            for (ResolveInfo r : pm.queryIntentActivities(teste, PackageManager.MATCH_ALL)) {
+                sb.append("• ").append(r.activityInfo.packageName).append("\n");
+            }
+        } catch (Exception e) {
+            sb.append("(erro ao consultar)\n");
+        }
+        sb.append("\nEscolhido: ").append(String.valueOf(acharAplicativoInstalado(teste)));
+        return sb.toString();
     }
 
     private void falhar(String mensagem) {
@@ -234,6 +296,8 @@ public class MainActivity extends Activity {
         progresso.setVisibility(carregando ? View.VISIBLE : View.GONE);
         botaoNavegador.setVisibility(View.GONE);
         botaoPagina.setVisibility(View.GONE);
+        botaoTeste.setVisibility(View.GONE);
+        botaoAbrir.setVisibility(View.GONE);
     }
 
     /** Abre a nota no navegador padrão (sem voltar para este app). */
